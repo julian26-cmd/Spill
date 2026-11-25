@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8">
+  <title>Snake med Teachable Machine</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #1b1b2f; color: #fff; margin: 0; padding: 10px; }
+    h1 { margin: 10px 0; }
+    #layout { display: flex; justify-content: center; align-items: flex-start; gap: 24px; flex-wrap: wrap; }
+    #hovedside { width: 400px; }
+    #wrapper { position: relative; width: 400px; height: 400px; }
+    canvas { background: #162447; border: 3px solid #fff; display: block; box-sizing: content-box; }
+    .overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.8); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 10px; box-sizing: border-box; }
+    .skjult { display: none; }
+    button { font-size: 20px; padding: 10px 24px; border: none; border-radius: 8px; background: #e43f5a; color: #fff; cursor: pointer; }
+    button:hover { background: #ff5470; }
+    #hud { margin: 10px 0; font-size: 20px; }
+    #hint { font-size: 14px; color: #aaa; margin-bottom: 8px; }
+    #webcam-container { margin-top: 10px; }
+    #status, #ai-status { font-size: 14px; color: #aaa; }
+
+    /* Sidepanel */
+    #panel { width: 280px; background: #162447; border: 3px solid #fff; border-radius: 8px; padding: 14px; text-align: left; box-sizing: border-box; }
+    #panel h2 { margin: 0 0 10px 0; font-size: 20px; text-align: center; }
+    .gest { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.15); }
+    .gest:last-of-type { border-bottom: none; }
+    .gest .ikon { font-size: 32px; width: 44px; text-align: center; }
+    .gest b { display: block; font-size: 16px; }
+    .gest span { font-size: 13px; color: #ccc; }
+    #fartboks { margin-top: 14px; padding-top: 12px; border-top: 2px solid rgba(255,255,255,0.3); }
+    #fartboks label { font-size: 16px; font-weight: bold; }
+    #fartSlider { width: 100%; margin-top: 8px; }
+    .fartskala { display: flex; justify-content: space-between; font-size: 12px; color: #aaa; }
+  </style>
+</head>
+<body>
+  <h1>🐍 Snake</h1>
+
+  <div id="layout">
+    <!-- Spillet -->
+    <div id="hovedside">
+      <div id="hud">Poeng: <span id="poeng">0</span> &nbsp;|&nbsp; Highscore: <span id="highscore">0</span></div>
+      <div id="hint">Trykk <b>mellomrom</b> for å pause</div>
+
+      <div id="wrapper">
+        <canvas id="spill" width="400" height="400"></canvas>
+
+        <!-- Meny -->
+        <div id="meny" class="overlay">
+          <h2>Styr slangen med kamera!</h2>
+          <p>Spis så mange <span id="mal2"></span> du kan og slå highscoren!<br>Trykk Start med musa, så tar kameraet over.</p>
+          <button id="startKnapp">Start</button>
+          <div id="status"></div>
+        </div>
+
+        <!-- Pause -->
+        <div id="pause" class="overlay skjult">
+          <h2>⏸ Pause</h2>
+          <p>Trykk mellomrom eller knappen for å fortsette.</p>
+          <button id="fortsettKnapp">Fortsett</button>
+        </div>
+
+        <!-- Game over -->
+        <div id="slutt" class="overlay skjult">
+          <h2 id="sluttTittel"></h2>
+          <p id="sluttTekst"></p>
+          <button id="igjenKnapp">Spill igjen</button>
+          <button id="menyKnapp">Meny</button>
+        </div>
+      </div>
+
+      <div id="webcam-container"></div>
+      <div id="ai-status"></div>
+    </div>
+
+    <!-- Sidepanel: bevegelser og fart -->
+    <div id="panel">
+      <h2>🖐 Bevegelser</h2>
+
+      <div class="gest">
+        <div class="ikon">⬆️</div>
+        <div><b>Opp</b><span>Peace-tegn ✌️</span></div>
+      </div>
+      <div class="gest">
+        <div class="ikon">⬅️</div>
+        <div><b>Venstre</b><span>Tommelen ut mot venstre, resten av fingrene lukket</span></div>
+      </div>
+      <div class="gest">
+        <div class="ikon">➡️</div>
+        <div><b>Høyre</b><span>Flat hånd, fingrene tett sammen ✋</span></div>
+      </div>
+      <div class="gest">
+        <div class="ikon">⬇️</div>
+        <div><b>Ned</b><span>Alle fingrene sammen, men lillefingeren står rett ut</span></div>
+      </div>
+      <div class="gest">
+        <div class="ikon">⏹</div>
+        <div><b>Ingenting</b><span>Hånda nede: slangen fortsetter rett frem</span></div>
+      </div>
+
+      <div id="fartboks">
+        <label for="fartSlider">Fart: <span id="fartTekst"></span></label>
+        <input type="range" id="fartSlider" min="1" max="10" step="1">
+        <div class="fartskala"><span>Treg</span><span>Rask</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    // ====== INNSTILLINGER ======
+    // 1) Lenken din fra Teachable Machine (må ende på /)
+    const MODEL_URL = "https://teachablemachine.withgoogle.com/models/nW21HX7Gx/";
+
+    // 2) Klassenavn (store/små bokstaver spiller ingen rolle).
+    //    Alt annet, f.eks. "Ingenting", gjør at slangen bare fortsetter rett frem.
+    const KLASSE_VENSTRE = "left";
+    const KLASSE_HOYRE   = "right";
+    const KLASSE_OPP     = "up";
+    const KLASSE_NED     = "down";
+
+    // 3) Spillet
+    const MAT = "🍕";            // bytt til hva du vil: 🍔 ⭐ 💎 🐟 ...
+    const MAT_NAVN = "pizza";
+    const SIKKERHET = 0.8;        // hvor sikker modellen må være (0–1)
+    const START_FARTNIVA = 6;     // 1 (treg) til 10 (rask). Kan også endres med skyveknappen.
+    const FART_OKNING = 10;       // slangen blir så mange ms raskere...
+    const POENG_PER_OKNING = 5;   // ...for hver gang du får så mange poeng
+    // ============================
+
+    const RUTER = 20;             // 20 x 20 ruter
+    const STR = 400 / RUTER;      // hver rute er 20 piksler
+
+    const canvas = document.getElementById("spill");
+    const ctx = canvas.getContext("2d");
+
+    let model = null, webcam = null;
+    let kameraKjorer = false;
+
+    let slange, retning, nesteRetning, mat, poeng = 0, fart, nyRekord;
+    let spillAktivt = false, pauset = false, tick = null, highscore = 0;
+    let fartNiva = START_FARTNIVA;
+
+    // ---------- Highscore ----------
+    try { highscore = parseInt(localStorage.getItem("snakeHighscore")) || 0; } catch (e) {}
+    function visHud() {
+      document.getElementById("poeng").innerText = poeng;
+      document.getElementById("highscore").innerText = highscore;
+    }
+    document.getElementById("mal2").innerText = MAT;
+    visHud();
+
+    // ---------- Fart ----------
+    // Nivå 1 = 400 ms mellom hvert steg, nivå 10 = 130 ms
+    function grunnFart() { return 400 - (fartNiva - 1) * 30; }
+    function beregnFart() {
+      const trinn = Math.floor(poeng / POENG_PER_OKNING);
+      const minFart = Math.round(grunnFart() * 0.5);
+      return Math.max(minFart, grunnFart() - trinn * FART_OKNING);
+    }
+    function oppdaterTikk() {
+      const ny = beregnFart();
+      if (ny === fart) return;
+      fart = ny;
+      if (spillAktivt && !pauset) {
+        clearInterval(tick);
+        tick = setInterval(steg, fart);
+      }
+    }
+    const slider = document.getElementById("fartSlider");
+    slider.value = fartNiva;
+    document.getElementById("fartTekst").innerText = fartNiva + " / 10";
+    slider.addEventListener("input", () => {
+      fartNiva = parseInt(slider.value);
+      document.getElementById("fartTekst").innerText = fartNiva + " / 10";
+      oppdaterTikk();
+    });
+    slider.addEventListener("change", () => slider.blur()); // så mellomrom alltid pauser spillet
+
+    // ---------- Meny ----------
+    document.getElementById("startKnapp").onclick = async () => {
+      const status = document.getElementById("status");
+      if (!model) {
+        try {
+          status.innerText = "Laster modell og kamera...";
+          model = await tmImage.load(MODEL_URL + "model.json", MODEL_URL + "metadata.json");
+          webcam = new tmImage.Webcam(200, 200, true);
+          await webcam.setup();
+          await webcam.play();
+          document.getElementById("webcam-container").appendChild(webcam.canvas);
+        } catch (feil) {
+          status.innerText = "Feil: sjekk MODEL_URL og at kameraet er tillatt.";
+          console.error(feil);
+          model = null;
+          return;
+        }
+      }
+      if (!kameraKjorer) {
+        kameraKjorer = true;
+        window.requestAnimationFrame(kameraLoop);
+      }
+      document.getElementById("meny").classList.add("skjult");
+      startSpill();
+    };
+    document.getElementById("igjenKnapp").onclick = () => {
+      document.getElementById("slutt").classList.add("skjult");
+      startSpill();
+    };
+    document.getElementById("menyKnapp").onclick = () => {
+      document.getElementById("slutt").classList.add("skjult");
+      document.getElementById("meny").classList.remove("skjult");
+    };
+
+    // ---------- Kamera ----------
+    async function kameraLoop() {
+      webcam.update();
+      const prediksjon = await model.predict(webcam.canvas);
+      let best = prediksjon[0];
+      for (const p of prediksjon) {
+        if (p.probability > best.probability) best = p;
+      }
+      document.getElementById("ai-status").innerText =
+        "Ser: " + best.className + " (" + Math.round(best.probability * 100) + "%)";
+
+      if (best.probability > SIKKERHET && !pauset) settRetning(best.className);
+      window.requestAnimationFrame(kameraLoop);
+    }
+
+    function settRetning(klasse) {
+      klasse = klasse.trim().toLowerCase();
+      let ny = null;
+      if (klasse === KLASSE_VENSTRE) ny = { x: -1, y: 0 };
+      if (klasse === KLASSE_HOYRE)   ny = { x: 1,  y: 0 };
+      if (klasse === KLASSE_OPP)     ny = { x: 0,  y: -1 };
+      if (klasse === KLASSE_NED)     ny = { x: 0,  y: 1 };
+      if (!ny) return; // f.eks. "Ingenting": behold retningen
+      // Slangen kan ikke snu 180 grader rett inn i seg selv
+      if (ny.x === -retning.x && ny.y === -retning.y) return;
+      nesteRetning = ny;
+    }
+
+    // ---------- Spill ----------
+    function startSpill() {
+      slange = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
+      retning = { x: 1, y: 0 };
+      nesteRetning = retning;
+      poeng = 0;
+      nyRekord = false;
+      nyMat();
+      visHud();
+      fart = beregnFart();
+      spillAktivt = true;
+      pauset = false;
+      document.getElementById("pause").classList.add("skjult");
+      clearInterval(tick);
+      tick = setInterval(steg, fart);
+      tegn();
+    }
+
+    function nyMat() {
+      let ledig = false;
+      while (!ledig) {
+        mat = { x: Math.floor(Math.random() * RUTER), y: Math.floor(Math.random() * RUTER) };
+        ledig = !slange.some(d => d.x === mat.x && d.y === mat.y);
+      }
+    }
+
+    function steg() {
+      retning = nesteRetning;
+      const hode = { x: slange[0].x + retning.x, y: slange[0].y + retning.y };
+
+      // Krasj i vegg eller i seg selv
+      const iVegg = hode.x < 0 || hode.y < 0 || hode.x >= RUTER || hode.y >= RUTER;
+      const iSeg = slange.some(d => d.x === hode.x && d.y === hode.y);
+      if (iVegg || iSeg) { slutt(); return; }
+
+      slange.unshift(hode);
+      if (hode.x === mat.x && hode.y === mat.y) {
+        poeng++;
+        if (poeng > highscore) {
+          highscore = poeng;
+          nyRekord = true;
+          try { localStorage.setItem("snakeHighscore", highscore); } catch (e) {}
+        }
+        visHud();
+        oppdaterTikk(); // slangen blir raskere for hver 5. poeng
+        nyMat();
+      } else {
+        slange.pop();
+      }
+      tegn();
+    }
+
+    function slutt() {
+      clearInterval(tick);
+      spillAktivt = false;
+      document.getElementById("sluttTittel").innerText = nyRekord ? "🏆 Ny highscore!" : "💥 Game over";
+      document.getElementById("sluttTekst").innerText =
+        "Poeng: " + poeng + " | Highscore: " + highscore;
+      document.getElementById("slutt").classList.remove("skjult");
+    }
+
+    // ---------- Pause ----------
+    function byttPause() {
+      if (!spillAktivt) return; // ingen pause i menyen eller på game over
+      if (!pauset) {
+        pauset = true;
+        clearInterval(tick);
+        document.getElementById("pause").classList.remove("skjult");
+      } else {
+        pauset = false;
+        document.getElementById("pause").classList.add("skjult");
+        tick = setInterval(steg, fart);
+      }
+    }
+    document.getElementById("fortsettKnapp").onclick = byttPause;
+    document.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (!e.repeat) byttPause();
+      }
+    });
+
+    function tegn() {
+      ctx.clearRect(0, 0, 400, 400);
+      // Mat
+      ctx.font = (STR - 2) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(MAT, mat.x * STR + STR / 2, mat.y * STR + STR / 2 + 1);
+      // Slange
+      slange.forEach((d, i) => {
+        ctx.fillStyle = i === 0 ? "#7bed9f" : "#2ed573";
+        ctx.fillRect(d.x * STR + 1, d.y * STR + 1, STR - 2, STR - 2);
+      });
+    }
+  </script>
+</body>
+</html>
